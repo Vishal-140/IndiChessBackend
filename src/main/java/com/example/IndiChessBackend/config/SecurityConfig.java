@@ -6,17 +6,14 @@ import com.example.IndiChessBackend.service.MyUserDetailsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.core.annotation.Order;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
-import org.springframework.security.crypto.password.NoOpPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -31,65 +28,96 @@ import java.util.List;
 @RequiredArgsConstructor
 public class SecurityConfig {
 
-    private final MyUserDetailsService userDetailService;
+    private final MyUserDetailsService myUserDetailsService;
     private final JwtFilter jwtFilter;
     private final OAuth2SuccessHandler oAuth2SuccessHandler;
 
+    // 🔐 Password encoder (BCrypt is secure)
     @Bean
-    PasswordEncoder passwordEncoder(){
+    public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    @Bean
-    public AuthenticationProvider authenticationProvider(){
-        // user details service
-        DaoAuthenticationProvider auth = new DaoAuthenticationProvider(userDetailService);
-        auth.setPasswordEncoder(passwordEncoder());
-        return auth;
+    // 🔐 Authentication provider using DB users
+     @Bean
+    public AuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider provider =
+                new DaoAuthenticationProvider(myUserDetailsService);
+        provider.setPasswordEncoder(passwordEncoder());
+        return provider;
     }
 
+    // 🔐 Authentication manager (used in login API)
     @Bean
     public AuthenticationManager authenticationManager(
-            AuthenticationConfiguration authenticationConfiguration) throws Exception {
-        return authenticationConfiguration.getAuthenticationManager();
+            AuthenticationConfiguration configuration) throws Exception {
+        return configuration.getAuthenticationManager();
     }
 
+    // 🌍 CORS configuration (Frontend → Backend)
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        // Allow only the frontend port (e.g., localhost:3000)
-        configuration.setAllowedOrigins(List.of("http://localhost:3000"));  // Frontend port
-        configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));  // Allow all HTTP methods (GET, POST, PUT, DELETE, etc.)
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "X-Requested-With"));  // Allow all headers
-        configuration.setAllowCredentials(true); // Allow credentials (cookies, JWT tokens)
 
+        configuration.setAllowedOrigins(
+                List.of("http://localhost:3000")
+        );
+        configuration.setAllowedMethods(
+                List.of("GET", "POST", "PUT", "DELETE", "OPTIONS")
+        );
+        configuration.setAllowedHeaders(
+                List.of("Authorization", "Content-Type")
+        );
+        configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
 
-        // Register this configuration for all endpoints
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        UrlBasedCorsConfigurationSource source =
+                new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
     }
 
-
-
+    // 🔐 Main security filter chain
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        return http
-                .cors(c -> c.configurationSource(corsConfigurationSource())) // Apply CORS configuration
-                .csrf(csrf -> csrf.disable())  // Disable CSRF for now (may re-enable if necessary)
+    public SecurityFilterChain securityFilterChain(HttpSecurity http)
+            throws Exception {
+
+        http
+                // Apply CORS
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+
+                // Disable CSRF (JWT is stateless)
+                .csrf(csrf -> csrf.disable())
+
+                // Stateless session
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
+
+                // Authorization rules
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/login", "/signup", "/oauth2/**", "/login/oauth2/**").permitAll()
+                        .requestMatchers(
+                                "/signup",
+                                "/login",
+                                "/logout",
+                                "/oauth2/**",
+                                "/login/oauth2/**",
+                                "/ws/**"
+                        ).permitAll()
                         .anyRequest().authenticated()
                 )
+
+                // OAuth2 login
                 .oauth2Login(oauth -> oauth
-                        .loginPage("/login") // Use custom page for OAuth login
-                        .successHandler(oAuth2SuccessHandler) // Handle success with custom handler
+                        .successHandler(oAuth2SuccessHandler)
                 )
-                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS)) // Allow session if needed
-                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class) // JWT filter for stateless API
-                .build();
+
+                // JWT filter before username/password filter
+                .addFilterBefore(
+                        jwtFilter,
+                        UsernamePasswordAuthenticationFilter.class
+                );
+
+        return http.build();
     }
-
-
 }

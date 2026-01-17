@@ -25,40 +25,54 @@ public class JwtFilter extends OncePerRequestFilter {
     private final MyUserDetailsService userDetailsService;
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request,
-                                    HttpServletResponse response,
-                                    FilterChain filterChain)
-            throws ServletException, IOException {
+    protected void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            FilterChain filterChain
+    ) throws ServletException, IOException {
 
-        // 1️⃣ Extract token from HTTP-only cookie
+        // 1️⃣ Extract JWT token from HTTP-only cookie
         String token = extractTokenFromCookies(request);
-        System.out.println("Inside jwt filter");
-        System.out.println(token);
         String username = null;
 
         if (token != null) {
-            // Extract username from token
-            username = jwtService.extractUsername(token);
+            try {
+                // Extract username from token
+                username = jwtService.extractUsername(token);
+            } catch (Exception e) {
+                // Invalid or expired token → ignore and continue
+                filterChain.doFilter(request, response);
+                return;
+            }
         }
 
         // 2️⃣ Authenticate user if not already authenticated
-        if (username != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-            UserDetails userDetails = userDetailsService.loadUserByUsername(username);
-            System.out.println(username);
-            // Validate token if user exists and token is valid
+        if (username != null &&
+                SecurityContextHolder.getContext().getAuthentication() == null) {
+
+            UserDetails userDetails =
+                    userDetailsService.loadUserByUsername(username);
+
+            // Validate token
             if (jwtService.isTokenValid(token, userDetails)) {
-                // Create authentication token
-                UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-                        userDetails,
-                        null,
-                        userDetails.getAuthorities()
+
+                UsernamePasswordAuthenticationToken authToken =
+                        new UsernamePasswordAuthenticationToken(
+                                userDetails,
+                                null,
+                                userDetails.getAuthorities()
+                        );
+
+                // Attach request details
+                authToken.setDetails(
+                        new WebAuthenticationDetailsSource()
+                                .buildDetails(request)
                 );
 
-                // Set additional details if needed (e.g., HTTP request)
-                authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-
-                // Set authentication in SecurityContext
-                SecurityContextHolder.getContext().setAuthentication(authToken);
+                // Set authentication in security context
+                SecurityContextHolder
+                        .getContext()
+                        .setAuthentication(authToken);
             }
         }
 
@@ -66,19 +80,18 @@ public class JwtFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    // Helper method to extract token from cookies
+    // 🔍 Helper method to extract JWT from cookies
     private String extractTokenFromCookies(HttpServletRequest request) {
-        // Iterate through cookies to find the JWT cookie
-        String token = null;
-        if (request.getCookies() != null) {
-            for (Cookie cookie : request.getCookies()) {
-                if ("JWT".equals(cookie.getName())) { // Look for JWT cookie
-                    token = cookie.getValue();
-                    break;
-                }
+
+        if (request.getCookies() == null) {
+            return null;
+        }
+
+        for (Cookie cookie : request.getCookies()) {
+            if ("JWT".equals(cookie.getName())) {
+                return cookie.getValue();
             }
         }
-        return token;
+        return null;
     }
-
 }

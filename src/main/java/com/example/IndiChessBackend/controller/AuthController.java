@@ -5,7 +5,6 @@ import com.example.IndiChessBackend.model.DTO.LoginResponseDto;
 import com.example.IndiChessBackend.model.User;
 import com.example.IndiChessBackend.service.AuthService;
 import com.example.IndiChessBackend.service.JwtService;
-import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -19,9 +18,6 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
-import java.time.Duration;
-import java.util.HashMap;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/")
@@ -68,6 +64,22 @@ public class AuthController {
 
         return new ResponseEntity<>(new LoginResponseDto(null, "Auth Failed"), HttpStatus.BAD_REQUEST);
     }
+
+    @PostMapping("/logout")
+    public ResponseEntity<String> logout(HttpServletResponse response) {
+
+        ResponseCookie cookie = ResponseCookie.from("JWT", "")
+                .httpOnly(true)
+                .secure(false) // true in production
+                .path("/")
+                .maxAge(0)
+                .build();
+
+        response.setHeader(HttpHeaders.SET_COOKIE, cookie.toString());
+
+        return ResponseEntity.ok("Logged out successfully");
+    }
+
 
     @GetMapping("home")
     public ResponseEntity<?> handleHome(){
