@@ -136,14 +136,14 @@ public class GameService {
     private GameState initializeGameState(Match match) {
 
         String[][] initialBoard = {
-                {"r","n","b","q","k","b","n","r"},
-                {"p","p","p","p","p","p","p","p"},
-                {"","","","","","","",""},
-                {"","","","","","","",""},
-                {"","","","","","","",""},
-                {"","","","","","","",""},
-                {"P","P","P","P","P","P","P","P"},
-                {"R","N","B","Q","K","B","N","R"}
+                {"r", "n", "b", "q", "k", "b", "n", "r"},
+                {"p", "p", "p", "p", "p", "p", "p", "p"},
+                {"", "", "", "", "", "", "", ""},
+                {"", "", "", "", "", "", "", ""},
+                {"", "", "", "", "", "", "", ""},
+                {"", "", "", "", "", "", "", ""},
+                {"P", "P", "P", "P", "P", "P", "P", "P"},
+                {"R", "N", "B", "Q", "K", "B", "N", "R"}
         };
 
         return new GameState(
@@ -155,6 +155,7 @@ public class GameService {
                 LocalDateTime.now()
         );
     }
+
     // =========================
 // CLOCK UPDATE
 // =========================
@@ -275,14 +276,20 @@ public class GameService {
         // ❌ Stop if time over
         if (match.getStatus() != MatchStatus.IN_PROGRESS) {
 
-            gameState.setStatus(match.getStatus().name());
+            String winner =
+                    match.getStatus() == MatchStatus.PLAYER1_WON
+                            ? match.getPlayer1().getUsername()
+                            : match.getPlayer2().getUsername();
+
+            gameState.setStatus("GAME_OVER");
             activeGames.put(matchId, gameState);
 
             Map<String, Object> payload = new HashMap<>();
             payload.put("type", "GAME_OVER");
             payload.put("reason", "TIME_OUT");
-            payload.put("winner", match.getStatus().name());
+            payload.put("winner", winner);
             payload.put("matchId", matchId);
+            payload.put("timestamp", System.currentTimeMillis());
 
             messagingTemplate.convertAndSend(
                     "/topic/game-state/" + matchId,
@@ -315,8 +322,6 @@ public class GameService {
 
         return moveDTO;
     }
-
-
 
 
 
@@ -459,42 +464,41 @@ public class GameService {
         }
 
         // Update in-memory state
-        gameState.setStatus("RESIGNED");
+        gameState.setStatus("GAME_OVER");
         activeGames.put(matchId, gameState);
 
-        // Update DB status
-        matchRepo.findById(matchId).ifPresent(match -> {
+        // Determine winner
+        String winner;
 
-            // Prevent double update
-            if (match.getStatus() != MatchStatus.IN_PROGRESS) {
-                return;
-            }
+        Match match = matchRepo.findById(matchId)
+                .orElseThrow(() -> new RuntimeException("Match not found"));
 
-            if (match.getPlayer1().getUsername().equals(username)) {
-                match.setStatus(MatchStatus.PLAYER2_WON);
-            } else if (match.getPlayer2().getUsername().equals(username)) {
-                match.setStatus(MatchStatus.PLAYER1_WON);
-            } else {
-                throw new RuntimeException("User not part of this match");
-            }
+        if (match.getPlayer1().getUsername().equals(username)) {
+            match.setStatus(MatchStatus.PLAYER2_WON);
+            winner = match.getPlayer2().getUsername();
+        } else if (match.getPlayer2().getUsername().equals(username)) {
+            match.setStatus(MatchStatus.PLAYER1_WON);
+            winner = match.getPlayer1().getUsername();
+        } else {
+            throw new RuntimeException("User not part of this match");
+        }
 
-            matchRepo.save(match);
-        });
+        matchRepo.save(match);
 
-        // WebSocket payload
+        // ✅ Unified GAME_OVER payload
         Map<String, Object> payload = new HashMap<>();
-        payload.put("type", "RESIGNED");
-        payload.put("player", username);
+        payload.put("type", "GAME_OVER");
+        payload.put("reason", "RESIGNATION");
+        payload.put("winner", winner);
+        payload.put("resignedBy", username);
         payload.put("matchId", matchId);
         payload.put("timestamp", System.currentTimeMillis());
 
-        // ✅ FIX: explicit Object cast avoids ambiguity
         messagingTemplate.convertAndSend(
                 "/topic/game-state/" + matchId,
                 (Object) payload
         );
     }
-
 
 
 
@@ -542,20 +546,36 @@ public class GameService {
             throw new RuntimeException("Game not active");
         }
 
+        // ❌ Do not allow if game already ended
+        if (!"IN_PROGRESS".equals(gameState.getStatus())) {
+            throw new RuntimeException("Game already finished");
+        }
+
+        // ✅ Ensure user is part of match
+        String opponent = getOpponentUsername(matchId, username);
+        if (opponent == null) {
+            throw new RuntimeException("User not part of this game");
+        }
+
         // Update in-memory state
-        gameState.setStatus("DRAW");
+        gameState.setStatus("GAME_OVER");
         activeGames.put(matchId, gameState);
 
-        // Update DB
+        // Update DB (prevent double update)
         matchRepo.findById(matchId).ifPresent(match -> {
-            match.setStatus(MatchStatus.DRAW);
-            matchRepo.save(match);
+            if (match.getStatus() == MatchStatus.IN_PROGRESS) {
+                match.setStatus(MatchStatus.DRAW);
+                matchRepo.save(match);
+            }
         });
 
+        // ✅ Unified GAME_OVER payload
         Map<String, Object> payload = new HashMap<>();
-        payload.put("type", "DRAW_ACCEPTED");
+        payload.put("type", "GAME_OVER");
+        payload.put("reason", "DRAW");
+        payload.put("acceptedBy", username);
         payload.put("matchId", matchId);
-        payload.put("by", username);
+        payload.put("timestamp", System.currentTimeMillis());
 
         messagingTemplate.convertAndSend(
                 "/topic/game-state/" + matchId,
@@ -580,6 +600,7 @@ public class GameService {
         payload.put("type", "DRAW_REJECTED");
         payload.put("matchId", matchId);
         payload.put("by", username);
+        payload.put("timestamp", System.currentTimeMillis());
 
         messagingTemplate.convertAndSendToUser(
                 opponent,
@@ -588,14 +609,13 @@ public class GameService {
         );
     }
 
-
     // =========================
-    // HELPERS
-    // =========================
+// HELPERS
+// =========================
     private String getOpponentUsername(Long matchId, String username) {
 
         List<String> players = gamePlayers.get(matchId);
-        if (players == null) return null;
+        if (players == null || players.size() < 2) return null;
 
         return players.get(0).equals(username)
                 ? players.get(1)
@@ -612,8 +632,9 @@ public class GameService {
         for (int r = 0; r < 8; r++) {
             int empty = 0;
             for (int c = 0; c < 8; c++) {
-                if (board[r][c].isEmpty()) empty++;
-                else {
+                if (board[r][c].isEmpty()) {
+                    empty++;
+                } else {
                     if (empty > 0) {
                         fen.append(empty);
                         empty = 0;
