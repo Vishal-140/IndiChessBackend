@@ -8,7 +8,6 @@ import com.example.IndiChessBackend.repo.MatchRepo;
 import com.example.IndiChessBackend.repo.UserRepo;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -17,34 +16,47 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class MatchService {
 
-    // Store waiting players
-    private static final Map<String, Long> waitingPlayers = new ConcurrentHashMap<>();
-    private static final Map<Long, String[]> matchPlayers = new ConcurrentHashMap<>();
+    // =========================
+    // MATCHMAKING STORAGE
+    // =========================
+
+    // Waiting players per game type
+    private static final Map<GameType, Map<String, Long>> waitingPlayers =
+            new ConcurrentHashMap<>();
+
+    // When user started waiting
+    private static final Map<String, Long> waitingStartTime =
+            new ConcurrentHashMap<>();
+
+    private static final long MAX_WAIT_TIME = 90_000; // 90 seconds
+
+    // matchId -> [player1, player2]
+    private static final Map<Long, String[]> matchPlayers =
+            new ConcurrentHashMap<>();
 
     private final JwtService jwtService;
     private final UserRepo userRepo;
     private final MatchRepo matchRepo;
-    private final GameService gameService;
 
-    @Autowired
-    MatchService(JwtService jwtService,
-                 UserRepo userRepo,
-                 MatchRepo matchRepo,
-                 GameService gameService) {
-
+    public MatchService(
+            JwtService jwtService,
+            UserRepo userRepo,
+            MatchRepo matchRepo
+    ) {
         this.jwtService = jwtService;
         this.userRepo = userRepo;
         this.matchRepo = matchRepo;
-        this.gameService = gameService;
 
-        new Timer().schedule(new TimerTask() {
-            public void run() {
-                cleanupOldEntries();
-            }
-        }, 0, 60000);
+        // Init queue for each game type
+        for (GameType type : GameType.values()) {
+            waitingPlayers.put(type, new ConcurrentHashMap<>());
+        }
     }
 
-    public String getJwtFromCookie(HttpServletRequest request) {
+    // =========================
+    // JWT FROM COOKIE
+    // =========================
+    private String getJwtFromCookie(HttpServletRequest request) {
 
         if (request.getCookies() == null) return null;
 
@@ -56,102 +68,119 @@ public class MatchService {
         return null;
     }
 
-    private void cleanupOldEntries() {
-        // Optional cleanup
-    }
-
     // =========================
     // CREATE MATCH
     // =========================
-    public Optional<Long> createMatch(HttpServletRequest request, GameType gameType) {
+    public Optional<Long> createMatch(
+            HttpServletRequest request,
+            GameType gameType
+    ) {
 
         String token = getJwtFromCookie(request);
-        String userName = jwtService.extractUsername(token);
+        String username = jwtService.extractUsername(token);
 
-        if (userName == null) {
-            return Optional.empty();
-        }
+        if (username == null) return Optional.empty();
 
-        System.out.println("User " + userName + " requesting " + gameType + " match");
+        Map<String, Long> queue = waitingPlayers.get(gameType);
 
-        synchronized (this) {
+        synchronized (queue) {
 
-            for (String waitingPlayer : waitingPlayers.keySet()) {
+            // Try to find opponent
+            for (String waitingUser : queue.keySet()) {
 
-                if (!waitingPlayer.equals(userName)) {
+                if (!waitingUser.equals(username)) {
 
-                    User player1 = userRepo.getUserByUsername(waitingPlayer);
-                    User player2 = userRepo.getUserByUsername(userName);
+                    User p1 = userRepo.getUserByUsername(waitingUser);
+                    User p2 = userRepo.getUserByUsername(username);
 
-                    if (player1 != null && player2 != null) {
+                    if (p1 == null || p2 == null) continue;
 
-                        Match newMatch = new Match(
-                                player1,
-                                player2,
-                                MatchStatus.IN_PROGRESS,
-                                gameType
-                        );
+                    Match match = new Match(
+                            p1,
+                            p2,
+                            MatchStatus.IN_PROGRESS,
+                            gameType
+                    );
 
-                        // ⏱ SET CLOCK BASED ON GAME TYPE
-                        if (gameType == GameType.RAPID) {
-                            newMatch.setWhiteTime(600); // 10 min
-                            newMatch.setBlackTime(600);
-                        } else if (gameType == GameType.BLITZ) {
-                            newMatch.setWhiteTime(180); // 3 min
-                            newMatch.setBlackTime(180);
-                        }
-
-                        matchRepo.save(newMatch);
-                        Long matchId = newMatch.getId();
-
-                        matchPlayers.put(matchId, new String[]{waitingPlayer, userName});
-                        waitingPlayers.remove(waitingPlayer);
-
-                        System.out.println("Match created: " + matchId);
-
-                        gameService.getGameDetails(matchId, request);
-                        return Optional.of(matchId);
+                    // ⏱ TIME CONTROL
+                    if (gameType == GameType.RAPID) {
+                        match.setWhiteTime(600); // 10 min
+                        match.setBlackTime(600);
+                    } else if (gameType == GameType.BLITZ) {
+                        match.setWhiteTime(180); // 3 min
+                        match.setBlackTime(180);
                     }
+
+                    matchRepo.save(match);
+
+                    Long matchId = match.getId();
+
+                    matchPlayers.put(matchId, new String[]{waitingUser, username});
+                    queue.remove(waitingUser);
+                    waitingStartTime.remove(waitingUser);
+
+                    return Optional.of(matchId);
                 }
             }
 
-            // No opponent found
-            waitingPlayers.put(userName, -1L);
-            System.out.println("User " + userName + " added to waiting queue");
+            // No opponent → start waiting
+            queue.put(username, -1L);
+            waitingStartTime.put(username, System.currentTimeMillis());
 
-            return Optional.of(-1L);
+            return Optional.of(-1L); // waiting
         }
     }
 
     // =========================
     // CHECK MATCH
     // =========================
-    public Optional<Long> checkMatch(HttpServletRequest request) {
+    public Optional<Long> checkMatch(
+            HttpServletRequest request,
+            GameType gameType
+    ) {
 
         String token = getJwtFromCookie(request);
-        String userName = jwtService.extractUsername(token);
+        String username = jwtService.extractUsername(token);
 
-        if (userName == null) {
-            return Optional.empty();
-        }
+        if (username == null) return Optional.empty();
 
-        synchronized (this) {
+        Map<String, Long> queue = waitingPlayers.get(gameType);
 
-            if (waitingPlayers.containsKey(userName)) {
+        synchronized (queue) {
+
+            // ⏳ TIMEOUT CHECK
+            Long startTime = waitingStartTime.get(username);
+            if (startTime != null) {
+                long waited = System.currentTimeMillis() - startTime;
+                if (waited > MAX_WAIT_TIME) {
+
+                    queue.remove(username);
+                    waitingStartTime.remove(username);
+
+                    return Optional.of(-2L); // timeout
+                }
+            }
+
+            // Still waiting
+            if (queue.containsKey(username)) {
                 return Optional.of(-1L);
             }
 
+            // Match found
             for (Map.Entry<Long, String[]> entry : matchPlayers.entrySet()) {
 
                 String[] players = entry.getValue();
 
-                if (players[0].equals(userName) || players[1].equals(userName)) {
+                if (players[0].equals(username) ||
+                        players[1].equals(username)) {
 
                     Long matchId = entry.getKey();
 
                     matchPlayers.remove(matchId);
-                    waitingPlayers.remove(players[0]);
-                    waitingPlayers.remove(players[1]);
+                    queue.remove(players[0]);
+                    queue.remove(players[1]);
+                    waitingStartTime.remove(players[0]);
+                    waitingStartTime.remove(players[1]);
 
                     return Optional.of(matchId);
                 }
@@ -164,67 +193,47 @@ public class MatchService {
     // =========================
     // CANCEL WAITING
     // =========================
-    public boolean cancelWaiting(HttpServletRequest request) {
+    public boolean cancelWaiting(
+            HttpServletRequest request,
+            GameType gameType
+    ) {
 
         String token = getJwtFromCookie(request);
-        String userName = jwtService.extractUsername(token);
+        String username = jwtService.extractUsername(token);
 
-        if (userName == null) {
-            return false;
-        }
+        if (username == null) return false;
 
-        synchronized (this) {
-            return waitingPlayers.remove(userName) != null;
-        }
+        waitingStartTime.remove(username);
+        return waitingPlayers.get(gameType).remove(username) != null;
     }
 
     // =========================
-    // GAME DETAILS FOR FRONTEND
+    // GAME DETAILS
     // =========================
-    public Map<String, Object> getGameDetailsForFrontend(Long matchId,
-                                                         HttpServletRequest request) {
+    public Map<String, Object> getGameDetailsForFrontend(
+            Long matchId,
+            HttpServletRequest request
+    ) {
 
         String token = getJwtFromCookie(request);
-        if (token == null) {
-            throw new RuntimeException("Not authenticated");
-        }
+        if (token == null) throw new RuntimeException("Not authenticated");
 
         String username = jwtService.extractUsername(token);
-        if (username == null) {
-            throw new RuntimeException("Invalid token");
-        }
 
         Match match = matchRepo.findById(matchId)
                 .orElseThrow(() -> new RuntimeException("Game not found"));
 
-        User player1 = match.getPlayer1();
-        User player2 = match.getPlayer2();
+        boolean isWhite =
+                match.getPlayer1().getUsername().equals(username);
 
-        boolean isPlayer1 = player1.getUsername().equals(username);
-        boolean isPlayer2 = player2 != null && player2.getUsername().equals(username);
+        Map<String, Object> res = new HashMap<>();
+        res.put("matchId", matchId);
+        res.put("playerColor", isWhite ? "white" : "black");
+        res.put("status", match.getStatus());
+        res.put("whiteTime", match.getWhiteTime());
+        res.put("blackTime", match.getBlackTime());
+        res.put("gameType", match.getGameType());
 
-        if (!isPlayer1 && !isPlayer2) {
-            throw new RuntimeException("Not authorized");
-        }
-
-        boolean isMyTurn = determineIfMyTurn(match, isPlayer1);
-
-        Map<String, Object> response = new HashMap<>();
-        response.put("matchId", match.getId());
-        response.put("playerColor", isPlayer1 ? "white" : "black");
-        response.put("isMyTurn", isMyTurn);
-        response.put("status", match.getStatus());
-        response.put("whiteTime", match.getWhiteTime());
-        response.put("blackTime", match.getBlackTime());
-        response.put("gameType", match.getGameType());
-
-        return response;
-    }
-
-    private boolean determineIfMyTurn(Match match, boolean isPlayer1) {
-
-        Integer ply = match.getCurrentPly() == null ? 0 : match.getCurrentPly();
-        boolean whiteTurn = ply % 2 == 0;
-        return (isPlayer1 && whiteTurn) || (!isPlayer1 && !whiteTurn);
+        return res;
     }
 }

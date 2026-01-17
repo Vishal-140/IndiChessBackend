@@ -28,47 +28,46 @@ public class MatchController {
             @RequestParam(defaultValue = "STANDARD") GameType gameType
     ) {
 
-        Optional<Long> matchIdOpt = matchService.createMatch(request, gameType);
+        Optional<Long> matchId =
+                matchService.createMatch(request, gameType);
 
-        Map<String, Long> response = new HashMap<>();
-        if (matchIdOpt.isPresent()) {
-            response.put("matchId", matchIdOpt.get());
-            return ResponseEntity.ok(response);
-        } else {
-            response.put("matchId", -2L); // -2 indicates error
-            return ResponseEntity.badRequest().body(response);
-        }
+        Map<String, Long> res = new HashMap<>();
+        res.put("matchId", matchId.orElse(-2L));
+        return ResponseEntity.ok(res);
     }
 
     // =========================
     // CHECK MATCH
     // =========================
     @GetMapping("/check-match")
-    public ResponseEntity<Map<String, Long>> checkMatch(HttpServletRequest request) {
+    public ResponseEntity<Map<String, Long>> checkMatch(
+            HttpServletRequest request,
+            @RequestParam(defaultValue = "STANDARD") GameType gameType
+    ) {
 
-        Optional<Long> matchIdOpt = matchService.checkMatch(request);
+        Optional<Long> matchId =
+                matchService.checkMatch(request, gameType);
 
-        Map<String, Long> response = new HashMap<>();
-        if (matchIdOpt.isPresent()) {
-            response.put("matchId", matchIdOpt.get());
-            return ResponseEntity.ok(response);
-        } else {
-            response.put("matchId", -2L);
-            return ResponseEntity.badRequest().body(response);
-        }
+        Map<String, Long> res = new HashMap<>();
+        res.put("matchId", matchId.orElse(-2L));
+        return ResponseEntity.ok(res);
     }
 
     // =========================
     // CANCEL WAITING
     // =========================
     @PostMapping("/cancel-waiting")
-    public ResponseEntity<Map<String, Boolean>> cancelWaiting(HttpServletRequest request) {
+    public ResponseEntity<Map<String, Boolean>> cancelWaiting(
+            HttpServletRequest request,
+            @RequestParam(defaultValue = "STANDARD") GameType gameType
+    ) {
 
-        boolean cancelled = matchService.cancelWaiting(request);
+        boolean cancelled =
+                matchService.cancelWaiting(request, gameType);
 
-        Map<String, Boolean> response = new HashMap<>();
-        response.put("cancelled", cancelled);
-        return ResponseEntity.ok(response);
+        return ResponseEntity.ok(
+                Map.of("cancelled", cancelled)
+        );
     }
 
     // =========================
@@ -77,25 +76,11 @@ public class MatchController {
     @GetMapping("/{matchId}")
     public ResponseEntity<Map<String, Object>> getGameDetails(
             @PathVariable Long matchId,
-            HttpServletRequest request) {
+            HttpServletRequest request
+    ) {
 
-        try {
-            Map<String, Object> response =
-                    matchService.getGameDetailsForFrontend(matchId, request);
-            return ResponseEntity.ok(response);
-
-        } catch (RuntimeException e) {
-
-            if (e.getMessage().contains("Not authenticated")) {
-                return ResponseEntity.status(401).body(Map.of("error", e.getMessage()));
-            } else if (e.getMessage().contains("Not authorized")) {
-                return ResponseEntity.status(403).body(Map.of("error", e.getMessage()));
-            } else if (e.getMessage().contains("not found")) {
-                return ResponseEntity.notFound().build();
-            }
-
-            return ResponseEntity.status(500)
-                    .body(Map.of("error", "Internal server error"));
-        }
+        return ResponseEntity.ok(
+                matchService.getGameDetailsForFrontend(matchId, request)
+        );
     }
 }
