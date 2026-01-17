@@ -14,12 +14,10 @@ import org.springframework.stereotype.Service;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static com.example.IndiChessBackend.model.MatchStatus.IN_PROGRESS;
-
 @Service
 public class MatchService {
 
-    // Store waiting players and their match IDs
+    // Store waiting players
     private static final Map<String, Long> waitingPlayers = new ConcurrentHashMap<>();
     private static final Map<Long, String[]> matchPlayers = new ConcurrentHashMap<>();
 
@@ -39,7 +37,6 @@ public class MatchService {
         this.matchRepo = matchRepo;
         this.gameService = gameService;
 
-        // Clean up old entries periodically (optional)
         new Timer().schedule(new TimerTask() {
             public void run() {
                 cleanupOldEntries();
@@ -48,25 +45,25 @@ public class MatchService {
     }
 
     public String getJwtFromCookie(HttpServletRequest request) {
-        Cookie[] cookies = request.getCookies();
-        if (cookies != null) {
-            for (Cookie cookie : cookies) {
-                if ("JWT".equals(cookie.getName())) {
-                    return cookie.getValue();
-                }
+
+        if (request.getCookies() == null) return null;
+
+        for (Cookie cookie : request.getCookies()) {
+            if ("JWT".equals(cookie.getName())) {
+                return cookie.getValue();
             }
         }
         return null;
     }
 
     private void cleanupOldEntries() {
-        // Optional cleanup logic
+        // Optional cleanup
     }
 
     // =========================
     // CREATE MATCH
     // =========================
-    public Optional<Long> createMatch(HttpServletRequest request) {
+    public Optional<Long> createMatch(HttpServletRequest request, GameType gameType) {
 
         String token = getJwtFromCookie(request);
         String userName = jwtService.extractUsername(token);
@@ -75,10 +72,7 @@ public class MatchService {
             return Optional.empty();
         }
 
-        System.out.println("User " + userName + " requesting match");
-
-        // ✅ DEFAULT GAME TYPE
-        GameType gameType = GameType.STANDARD;
+        System.out.println("User " + userName + " requesting " + gameType + " match");
 
         synchronized (this) {
 
@@ -91,13 +85,21 @@ public class MatchService {
 
                     if (player1 != null && player2 != null) {
 
-                        // ✅ CORRECT MATCH CREATION
                         Match newMatch = new Match(
                                 player1,
                                 player2,
                                 MatchStatus.IN_PROGRESS,
                                 gameType
                         );
+
+                        // ⏱ SET CLOCK BASED ON GAME TYPE
+                        if (gameType == GameType.RAPID) {
+                            newMatch.setWhiteTime(600); // 10 min
+                            newMatch.setBlackTime(600);
+                        } else if (gameType == GameType.BLITZ) {
+                            newMatch.setWhiteTime(180); // 3 min
+                            newMatch.setBlackTime(180);
+                        }
 
                         matchRepo.save(newMatch);
                         Long matchId = newMatch.getId();
@@ -107,9 +109,7 @@ public class MatchService {
 
                         System.out.println("Match created: " + matchId);
 
-                        // Initialize game state
                         gameService.getGameDetails(matchId, request);
-
                         return Optional.of(matchId);
                     }
                 }
@@ -153,7 +153,6 @@ public class MatchService {
                     waitingPlayers.remove(players[0]);
                     waitingPlayers.remove(players[1]);
 
-                    System.out.println("Returning match " + matchId + " to " + userName);
                     return Optional.of(matchId);
                 }
             }
@@ -175,30 +174,8 @@ public class MatchService {
         }
 
         synchronized (this) {
-            boolean removed = waitingPlayers.remove(userName) != null;
-            if (removed) {
-                System.out.println("User " + userName + " cancelled waiting");
-            }
-            return removed;
+            return waitingPlayers.remove(userName) != null;
         }
-    }
-
-    private Map<String, Object> createPlayerInfo(User user) {
-        Map<String, Object> playerInfo = new HashMap<>();
-        playerInfo.put("id", user.getUserId());
-        playerInfo.put("username", user.getUsername());
-        return playerInfo;
-    }
-
-    private boolean determineIfMyTurn(Match match, boolean isPlayer1) {
-
-        Integer currentPly = match.getCurrentPly();
-        if (currentPly == null) {
-            currentPly = 0;
-        }
-
-        boolean isWhiteTurn = currentPly % 2 == 0;
-        return (isPlayer1 && isWhiteTurn) || (!isPlayer1 && !isWhiteTurn);
     }
 
     // =========================
@@ -230,28 +207,24 @@ public class MatchService {
             throw new RuntimeException("Not authorized");
         }
 
-        String playerColor = isPlayer1 ? "white" : "black";
         boolean isMyTurn = determineIfMyTurn(match, isPlayer1);
 
         Map<String, Object> response = new HashMap<>();
         response.put("matchId", match.getId());
-        response.put("player1", createPlayerInfo(player1));
-
-        if (player2 != null) {
-            response.put("player2", createPlayerInfo(player2));
-        }
-
-        response.put("status", match.getStatus().toString());
-        response.put("playerColor", playerColor);
+        response.put("playerColor", isPlayer1 ? "white" : "black");
         response.put("isMyTurn", isMyTurn);
-        response.put("createdAt", match.getCreatedAt());
-        response.put("startedAt", match.getStartedAt());
-        response.put("currentPly", match.getCurrentPly());
-        response.put("fenCurrent", match.getFenCurrent());
+        response.put("status", match.getStatus());
         response.put("whiteTime", match.getWhiteTime());
         response.put("blackTime", match.getBlackTime());
         response.put("gameType", match.getGameType());
 
         return response;
+    }
+
+    private boolean determineIfMyTurn(Match match, boolean isPlayer1) {
+
+        Integer ply = match.getCurrentPly() == null ? 0 : match.getCurrentPly();
+        boolean whiteTurn = ply % 2 == 0;
+        return (isPlayer1 && whiteTurn) || (!isPlayer1 && !whiteTurn);
     }
 }

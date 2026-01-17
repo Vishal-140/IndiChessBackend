@@ -1,8 +1,6 @@
 package com.example.IndiChessBackend.controller;
 
-import com.example.IndiChessBackend.model.Match;
-import com.example.IndiChessBackend.model.User;
-import com.example.IndiChessBackend.service.JwtService;
+import com.example.IndiChessBackend.model.GameType;
 import com.example.IndiChessBackend.service.MatchService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -20,11 +18,17 @@ import java.util.Optional;
 public class MatchController {
 
     private final MatchService matchService;
-    private final JwtService jwtService;
 
+    // =========================
+    // CREATE MATCH
+    // =========================
     @PostMapping
-    public ResponseEntity<Map<String, Long>> createMatch(HttpServletRequest request) {
-        Optional<Long> matchIdOpt = matchService.createMatch(request);
+    public ResponseEntity<Map<String, Long>> createMatch(
+            HttpServletRequest request,
+            @RequestParam(defaultValue = "STANDARD") GameType gameType
+    ) {
+
+        Optional<Long> matchIdOpt = matchService.createMatch(request, gameType);
 
         Map<String, Long> response = new HashMap<>();
         if (matchIdOpt.isPresent()) {
@@ -36,8 +40,12 @@ public class MatchController {
         }
     }
 
+    // =========================
+    // CHECK MATCH
+    // =========================
     @GetMapping("/check-match")
     public ResponseEntity<Map<String, Long>> checkMatch(HttpServletRequest request) {
+
         Optional<Long> matchIdOpt = matchService.checkMatch(request);
 
         Map<String, Long> response = new HashMap<>();
@@ -45,13 +53,17 @@ public class MatchController {
             response.put("matchId", matchIdOpt.get());
             return ResponseEntity.ok(response);
         } else {
-            response.put("matchId", -2L); // -2 indicates error
+            response.put("matchId", -2L);
             return ResponseEntity.badRequest().body(response);
         }
     }
 
+    // =========================
+    // CANCEL WAITING
+    // =========================
     @PostMapping("/cancel-waiting")
     public ResponseEntity<Map<String, Boolean>> cancelWaiting(HttpServletRequest request) {
+
         boolean cancelled = matchService.cancelWaiting(request);
 
         Map<String, Boolean> response = new HashMap<>();
@@ -59,18 +71,21 @@ public class MatchController {
         return ResponseEntity.ok(response);
     }
 
+    // =========================
+    // GAME DETAILS
+    // =========================
     @GetMapping("/{matchId}")
     public ResponseEntity<Map<String, Object>> getGameDetails(
             @PathVariable Long matchId,
             HttpServletRequest request) {
 
         try {
-            // Delegate to MatchService
-            Map<String, Object> response = matchService.getGameDetailsForFrontend(matchId, request);
+            Map<String, Object> response =
+                    matchService.getGameDetailsForFrontend(matchId, request);
             return ResponseEntity.ok(response);
 
         } catch (RuntimeException e) {
-            // Handle specific exceptions
+
             if (e.getMessage().contains("Not authenticated")) {
                 return ResponseEntity.status(401).body(Map.of("error", e.getMessage()));
             } else if (e.getMessage().contains("Not authorized")) {
@@ -78,8 +93,9 @@ public class MatchController {
             } else if (e.getMessage().contains("not found")) {
                 return ResponseEntity.notFound().build();
             }
-            return ResponseEntity.status(500).body(Map.of("error", "Internal server error"));
+
+            return ResponseEntity.status(500)
+                    .body(Map.of("error", "Internal server error"));
         }
     }
-
 }
