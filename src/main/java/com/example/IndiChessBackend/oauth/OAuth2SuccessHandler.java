@@ -28,58 +28,44 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
             HttpServletResponse response,
             Authentication authentication) throws IOException {
 
-        // Get OAuth user details
         OAuth2User oauthUser = (OAuth2User) authentication.getPrincipal();
 
         String email = oauthUser.getAttribute("email");
         String name = oauthUser.getAttribute("name");
 
-        System.out.println("OAuth Email: " + email);
-        System.out.println("OAuth Name: " + name);
-
-        // Safety check (some providers may not return email)
+        // ✅ GitHub fallback (email can be null)
         if (email == null) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Email not found from OAuth provider");
-            return;
+            String login = oauthUser.getAttribute("login"); // github username
+            email = login + "@github.com";
         }
 
-        // Check if user already exists
         User user = userRepo.getUserByEmailId(email);
 
         if (user == null) {
-            // Create new user if not exists
             user = new User();
             user.setEmailId(email);
 
-            // If name is null, generate a random username
-            if (name == null || name.isBlank()) {
-                name = "user_" + UUID.randomUUID();
-            }
+            // ✅ generate UNIQUE username ONCE
+            String username;
+            do {
+                username = "user_" + UUID.randomUUID().toString().substring(0, 8);
+            } while (userRepo.existsByUsername(username));
 
-            user.setUsername(name);
-
-            // Save new user
+            user.setUsername(username);
             userRepo.save(user);
         }
 
 
-        // Generate JWT token (IMPORTANT: use username, not name directly)
         String jwt = jwtService.generateToken(user.getUsername());
 
-        System.out.println("Generated JWT: " + jwt);
+        Cookie cookie = new Cookie("JWT", jwt);
+        cookie.setHttpOnly(true);
+        cookie.setSecure(false); // localhost
+        cookie.setPath("/");
+        cookie.setMaxAge(60 * 60);
 
-        // Store JWT in HTTP-only cookie
-        Cookie jwtCookie = new Cookie("JWT", jwt);
-        jwtCookie.setHttpOnly(true); // Prevent JavaScript access
-        jwtCookie.setPath("/"); // Available for whole app
-        jwtCookie.setMaxAge(60 * 60); // 1 hour
+        response.addCookie(cookie);
 
-        // Set secure=false for localhost, true for production (HTTPS)
-        jwtCookie.setSecure(false);
-
-        response.addCookie(jwtCookie);
-
-        // Redirect to frontend home page
         response.sendRedirect("http://localhost:3000/home");
     }
 }

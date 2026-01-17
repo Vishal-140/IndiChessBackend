@@ -31,29 +31,33 @@ public class JwtFilter extends OncePerRequestFilter {
             FilterChain filterChain
     ) throws ServletException, IOException {
 
-        // 1️⃣ Extract JWT token from HTTP-only cookie
-        String token = extractTokenFromCookies(request);
-        String username = null;
-
-        if (token != null) {
-            try {
-                // Extract username from token
-                username = jwtService.extractUsername(token);
-            } catch (Exception e) {
-                // Invalid or expired token → ignore and continue
-                filterChain.doFilter(request, response);
-                return;
-            }
+        // ✅ IMPORTANT: Skip OAuth2 callback URLs
+        String path = request.getRequestURI();
+        if (path.startsWith("/login/oauth2") || path.startsWith("/oauth2")) {
+            filterChain.doFilter(request, response);
+            return;
         }
 
-        // 2️⃣ Authenticate user if not already authenticated
-        if (username != null &&
-                SecurityContextHolder.getContext().getAuthentication() == null) {
+        String token = extractTokenFromCookies(request);
+        String username;
+
+        if (token == null) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        try {
+            username = jwtService.extractUsername(token);
+        } catch (Exception e) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        if (SecurityContextHolder.getContext().getAuthentication() == null) {
 
             UserDetails userDetails =
                     userDetailsService.loadUserByUsername(username);
 
-            // Validate token
             if (jwtService.isTokenValid(token, userDetails)) {
 
                 UsernamePasswordAuthenticationToken authToken =
@@ -63,29 +67,21 @@ public class JwtFilter extends OncePerRequestFilter {
                                 userDetails.getAuthorities()
                         );
 
-                // Attach request details
                 authToken.setDetails(
                         new WebAuthenticationDetailsSource()
                                 .buildDetails(request)
                 );
 
-                // Set authentication in security context
-                SecurityContextHolder
-                        .getContext()
+                SecurityContextHolder.getContext()
                         .setAuthentication(authToken);
             }
         }
 
-        // 3️⃣ Continue filter chain
         filterChain.doFilter(request, response);
     }
 
-    // 🔍 Helper method to extract JWT from cookies
     private String extractTokenFromCookies(HttpServletRequest request) {
-
-        if (request.getCookies() == null) {
-            return null;
-        }
+        if (request.getCookies() == null) return null;
 
         for (Cookie cookie : request.getCookies()) {
             if ("JWT".equals(cookie.getName())) {

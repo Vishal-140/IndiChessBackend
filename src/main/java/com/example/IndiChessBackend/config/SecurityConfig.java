@@ -32,29 +32,32 @@ public class SecurityConfig {
     private final JwtFilter jwtFilter;
     private final OAuth2SuccessHandler oAuth2SuccessHandler;
 
-    // 🔐 Password encoder (BCrypt is secure)
+    // 🔐 Password encoder
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    // 🔐 Authentication provider using DB users
-     @Bean
+    // 🔐 Authentication provider
+    @Bean
     public AuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider provider =
                 new DaoAuthenticationProvider(myUserDetailsService);
+
         provider.setPasswordEncoder(passwordEncoder());
         return provider;
     }
 
-    // 🔐 Authentication manager (used in login API)
+
+    // 🔐 Authentication manager
     @Bean
     public AuthenticationManager authenticationManager(
-            AuthenticationConfiguration configuration) throws Exception {
+            AuthenticationConfiguration configuration
+    ) throws Exception {
         return configuration.getAuthenticationManager();
     }
 
-    // 🌍 CORS configuration (Frontend → Backend)
+    // 🌍 CORS config
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
@@ -77,19 +80,19 @@ public class SecurityConfig {
         return source;
     }
 
-    // 🔐 Main security filter chain
+    // 🔐 Security filter chain
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http)
             throws Exception {
 
         http
-                // Apply CORS
+                // CORS
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 
-                // Disable CSRF (JWT is stateless)
+                // Disable CSRF
                 .csrf(csrf -> csrf.disable())
 
-                // Stateless session
+                // Stateless session (JWT)
                 .sessionManagement(session ->
                         session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
@@ -108,11 +111,11 @@ public class SecurityConfig {
                 )
 
                 // OAuth2 login
-                .oauth2Login(oauth -> oauth
-                        .successHandler(oAuth2SuccessHandler)
+                .oauth2Login(oauth ->
+                        oauth.successHandler(oAuth2SuccessHandler)
                 )
 
-                // JWT filter before username/password filter
+                // JWT filter
                 .addFilterBefore(
                         jwtFilter,
                         UsernamePasswordAuthenticationFilter.class
